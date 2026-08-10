@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Face & Body Presence Timer</title>
+    <style>
+        /* Mobile-first, Android-friendly styling */
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1e1e1e;
+            --text-primary: #ffffff;
+            --text-secondary: #aaaaaa;
+            --accent-color: #6200ee;
+            --accent-hover: #7c4dff;
+            --danger-color: #cf6679;
+            --success-color: #4caf50;
+            --warning-color: #ff9800;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Roboto', 'Segoe UI', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Timer Display */
+        .timer-display {
+            background-color: var(--surface-color);
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .time {
+            font-size: 3.5rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+
+        /* Status Pill */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            background-color: #333;
+            transition: all 0.3s ease;
+        }
+
+        .status-pill.running {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success-color);
+        }
+
+        .status-pill.paused {
+            background-color: rgba(207, 102, 121, 0.2);
+            color: var(--danger-color);
+        }
+
+        .status-pill.idle {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: var(--warning-color);
+        }
+
+        /* Camera View */
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 3 / 4; /* Standard mobile camera ratio */
+            background-color: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        video, canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        canvas {
+            z-index: 10;
+        }
+
+        .confidence-indicator {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            z-index: 20;
+            backdrop-filter: blur(4px);
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 12px;
+            flex-direction: column;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: background-color 0.2s, opacity 0.2s;
+            touch-action: manipulation;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        .btn-primary:active {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-danger {
+            background-color: var(--danger-color);
+            color: white;
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            border: 2px solid var(--text-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:active {
+            background-color: rgba(255,255,255,0.1);
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Timer Section -->
+    <div class="timer-display">
+        <div class="time" id="timeDisplay">00:00:00</div>
+        <div class="status-pill idle" id="statusPill">
+            🟡 Loading Face & Body Models...
+        </div>
+    </div>
+
+    <!-- Camera / Face & Body Detection Section -->
+    <div class="video-wrapper">
+        <!-- Playsinline required for mobile browsers to prevent fullscreen takeover -->
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output_canvas"></canvas>
+        <div class="confidence-indicator" id="confidenceEl">Camera not started</div>
+        <div id="errorEl" style="position:absolute;top:12px;left:12px;right:12px;z-index:30;
+             background:rgba(120,0,0,.85);padding:10px;border-radius:8px;
+             font-size:.82rem;display:none;"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+        <button id="startStopBtn" class="btn-primary">Allow Camera & Start</button>
+        <button id="resetBtn" class="btn-secondary">Reset Timer</button>
+        <div style="text-align:center;color:#aaa;font-size:.82rem;line-height:1.4;">
+            Camera permission is requested when you tap <b>Allow Camera &amp; Start</b>.
+            If you previously blocked it, allow Camera for this site in Chrome's site settings.
+        </div>
+    </div>
+</div>
+
+<!-- Import MediaPipe Tasks Vision dynamically via ES Modules -->
+<script type="module">
+    // Face + body presence timer.
+    // Camera permission is requested only after the user presses the button.
+
+    const statusPill = document.getElementById("statusPill");
+    const confidenceEl = document.getElementById("confidenceEl");
+    const errorEl = document.getElementById("errorEl");
+    const startStopBtn = document.getElementById("startStopBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const timeDisplay = document.getElementById("timeDisplay");
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("output_canvas");
+    const ctx = canvas.getContext("2d");
+
+    const MP_VERSION = "0.10.3";
+    const WASM_URL =
+        `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
+
+    const FACE_MODEL_URL =
+        "https://storage.googleapis.com/mediapipe-models/face_detector/" +
+        "blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+
+    const PERSON_MODEL_URL =
+        "https://storage.googleapis.com/mediapipe-models/object_detector/" +
+        "efficientdet_lite0/int8/1/efficientdet_lite0.tflite";
+
+    let FaceDetector;
+    let ObjectDetector;
+    let FilesetResolver;
+
+    let faceDetector = null;
+    let personDetector = null;
+    let modelsReady = false;
+    let modelsLoading = false;
+
+    let stream = null;
+    let isDetecting = false;
+    let animationId = null;
+    let detectionBusy = false;
+    let lastDetectionTime = 0;
+
+    // Keep AI load moderate for Android phones.
+    const DETECTION_INTERVAL_MS = 150;
+
+    // Timer state.
+    let accumulatedTime = 0;
+    let sessionStartTime = 0;
+    let isPresent = false;
+
+    // Detection stability.
+    let presenceFirstSeenTime = 0;
+    let presenceLastSeenTime = 0;
+    const START_DEBOUNCE_MS = 250;
+    const STOP_DEBOUNCE_MS = 1000;
+
+    function updateStatus(text, state) {
+        statusPill.textContent = text;
+        statusPill.className = `status-pill ${state}`;
+    }
+
+    function showError(message) {
+        errorEl.textContent = message;
+        errorEl.style.display = "block";
+    }
+
+    function hideError() {
+        errorEl.textContent = "";
+        errorEl.style.display = "none";
+    }
+
+    function formatTime(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        return (
+            String(hours).padStart(2, "0") + ":" +
+            String(minutes).padStart(2, "0") + ":" +
+            String(seconds).padStart(2, "0")
+        );
+    }
+
+    function updateTimerDisplay() {
+        let value = accumulatedTime;
+
+        if (isPresent && isDetecting) {
+            value += Date.now() - sessionStartTime;
+        }
+
+        timeDisplay.textContent = formatTime(value);
+    }
+
+    function drawBox(box, label) {
+        if (!box) return;
+
+        // MediaPipe coordinates are already in the source-video coordinate
+        // system. The canvas uses the same intrinsic dimensions.
+        const x = box.originX;
+        const y = box.originY;
+        const w = box.width;
+        const h = box.height;
+
+        ctx.strokeStyle = label.startsWith("FACE") ? "#4caf50" : "#2196f3";
+        ctx.lineWidth = Math.max(3, canvas.width / 180);
+        ctx.strokeRect(x, y, w, h);
+
+        ctx.font = `${Math.max(14, canvas.width / 35)}px sans-serif`;
+        const textWidth = ctx.measureText(label).width;
+        const labelHeight = Math.max(22, canvas.width / 25);
+        const labelY = Math.max(labelHeight, y);
+
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.fillRect(x, labelY - labelHeight, textWidth + 12, labelHeight);
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, x + 6, labelY - 6);
+    }
+
+    async function loadMediaPipe() {
+        if (modelsReady) return true;
+        if (modelsLoading) return false;
+
+        modelsLoading = true;
+        updateStatus("🟡 Loading AI models...", "idle");
+        confidenceEl.textContent = "Loading face + body detection...";
+
+        try {
+            // Dynamic import lets the page show a useful error instead of
+            // silently failing if the CDN/module cannot be loaded.
+            const visionModule = await import(
+                `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.js`
+            );
+
+            FaceDetector = visionModule.FaceDetector;
+            ObjectDetector = visionModule.ObjectDetector;
+            FilesetResolver = visionModule.FilesetResolver;
+
+            if (!FaceDetector || !ObjectDetector || !FilesetResolver) {
+                throw new Error("MediaPipe module loaded, but required classes are missing.");
+            }
+
+            const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+
+            // CPU is intentionally used here for better Android/browser
+            // compatibility. The previous version forced GPU.
+            faceDetector = await FaceDetector.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: FACE_MODEL_URL,
+                    delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                minDetectionConfidence: 0.5
+            });
+
+            personDetector = await ObjectDetector.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: PERSON_MODEL_URL,
+                    delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                maxResults: 3,
+                scoreThreshold: 0.45,
+                categoryAllowlist: ["person"]
+            });
+
+            modelsReady = true;
+            modelsLoading = false;
+
+            hideError();
+            updateStatus(
+                isDetecting ? "🟡 Looking for face or body..." : "⚪ Ready",
+                "idle"
+            );
+            confidenceEl.textContent = "Face + body detector ready";
+            return true;
+
+        } catch (error) {
+            modelsLoading = false;
+            console.error("MediaPipe load error:", error);
+
+            const message = error?.message || String(error);
+            showError(
+                "AI model error: " + message +
+                " — Check your internet connection and reload the page."
+            );
+
+            updateStatus("🔴 AI model failed", "paused");
+            confidenceEl.textContent = "Camera can work, but detection is unavailable.";
+            return false;
+        }
+    }
+
+    async function detectFrame() {
+        if (!isDetecting || !modelsReady || detectionBusy) return;
+
+        const now = Date.now();
+
+        if (
+            now - lastDetectionTime < DETECTION_INTERVAL_MS ||
+            video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+            video.videoWidth === 0 ||
+            video.videoHeight === 0
+        ) {
+            return;
+        }
+
+        lastDetectionTime = now;
+        detectionBusy = true;
+
+        try {
+            const timestamp = performance.now();
+
+            // VIDEO mode requires monotonically increasing timestamps.
+            const faceResult = faceDetector.detectForVideo(video, timestamp);
+            const personResult = personDetector.detectForVideo(video, timestamp);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const faces = faceResult?.detections || [];
+            const persons = personResult?.detections || [];
+
+            let bestConfidence = 0;
+
+            for (const detection of faces) {
+                const score = detection.categories?.[0]?.score || 0;
+                bestConfidence = Math.max(bestConfidence, score);
+                drawBox(
+                    detection.boundingBox,
+                    `FACE ${Math.round(score * 100)}%`
+                );
+            }
+
+            for (const detection of persons) {
+                const score = detection.categories?.[0]?.score || 0;
+                bestConfidence = Math.max(bestConfidence, score);
+                drawBox(
+                    detection.boundingBox,
+                    `BODY ${Math.round(score * 100)}%`
+                );
+            }
+
+            const faceDetected = faces.length > 0;
+            const bodyDetected = persons.length > 0;
+            const humanDetected = faceDetected || bodyDetected;
+
+            if (humanDetected) {
+                const types = [
+                    faceDetected ? "Face" : "",
+                    bodyDetected ? "Body" : ""
+                ].filter(Boolean).join(" + ");
+
+                confidenceEl.textContent =
+                    `Detected: ${types} • Confidence: ` +
+                    `${Math.round(bestConfidence * 100)}%`;
+
+                if (presenceFirstSeenTime === 0) {
+                    presenceFirstSeenTime = now;
+                }
+
+                presenceLastSeenTime = now;
+
+                if (
+                    !isPresent &&
+                    now - presenceFirstSeenTime >= START_DEBOUNCE_MS
+                ) {
+                    isPresent = true;
+                    sessionStartTime = now;
+                    updateStatus(
+                        "🟢 Human detected — Timer running",
+                        "running"
+                    );
+                }
+
+            } else {
+                confidenceEl.textContent =
+                    "Detected: None • Confidence: 0%";
+
+                presenceFirstSeenTime = 0;
+
+                if (
+                    isPresent &&
+                    now - presenceLastSeenTime >= STOP_DEBOUNCE_MS
+                ) {
+                    accumulatedTime += now - sessionStartTime;
+                    sessionStartTime = 0;
+                    isPresent = false;
+
+                    updateStatus(
+                        "🔴 No face or body — Timer paused",
+                        "paused"
+                    );
+                }
+            }
+
+        } catch (error) {
+            console.error("Detection error:", error);
+            showError("Detection error: " + (error?.message || String(error)));
+        } finally {
+            detectionBusy = false;
+        }
+    }
+
+    function detectionLoop() {
+        if (!isDetecting) return;
+
+        detectFrame();
+        updateTimerDisplay();
+
+        animationId = requestAnimationFrame(detectionLoop);
+    }
+
+    async function startDetection() {
+        hideError();
+
+        if (!window.isSecureContext) {
+            showError(
+                "Camera requires HTTPS. Open this page through your GitHub Pages HTTPS address."
+            );
+            updateStatus("🔴 HTTPS required", "paused");
+            return;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+            showError(
+                "This browser does not provide camera access. Try the latest Chrome."
+            );
+            updateStatus("🔴 Camera API unavailable", "paused");
+            return;
+        }
+
+        startStopBtn.disabled = true;
+        updateStatus("🟡 Requesting camera permission...", "idle");
+
+        try {
+            // This call triggers Android/Chrome's camera permission dialog.
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: "user" },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                },
+                audio: false
+            });
+
+            video.srcObject = stream;
+            await video.play();
+
+            if (!video.videoWidth || !video.videoHeight) {
+                await new Promise(resolve => {
+                    video.addEventListener("loadedmetadata", resolve, {
+                        once: true
+                    });
+                });
+            }
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            isDetecting = true;
+            isPresent = false;
+            presenceFirstSeenTime = 0;
+            presenceLastSeenTime = 0;
+            lastDetectionTime = 0;
+            detectionBusy = false;
+
+            startStopBtn.textContent = "Stop Detection";
+            startStopBtn.classList.replace("btn-primary", "btn-danger");
+
+            updateStatus("🟡 Camera active — loading detector...", "idle");
+            confidenceEl.textContent = "Camera active";
+
+            // Camera appears immediately; models load afterward.
+            const ready = await loadMediaPipe();
+
+            if (ready) {
+                updateStatus("🟡 Looking for face or body...", "idle");
+                detectionLoop();
+            } else {
+                // Keep camera open, but don't pretend detection is working.
+                updateStatus("🔴 Detection unavailable", "paused");
+                detectionLoop();
+            }
+
+        } catch (error) {
+            console.error("Camera error:", error);
+
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            video.srcObject = null;
+
+            let message;
+
+            switch (error?.name) {
+                case "NotAllowedError":
+                    message =
+                        "Camera permission was denied. In Chrome, tap the site " +
+                        "settings icon → Permissions → Camera → Allow, then reload.";
+                    break;
+                case "NotFoundError":
+                    message = "No camera was found on this device.";
+                    break;
+                case "NotReadableError":
+                    message =
+                        "The camera is busy. Close other apps using the camera and try again.";
+                    break;
+                case "SecurityError":
+                    message =
+                        "Camera access was blocked by browser security. Use HTTPS.";
+                    break;
+                default:
+                    message = "Camera error: " + (error?.message || String(error));
+            }
+
+            showError(message);
+            updateStatus("🔴 Camera unavailable", "paused");
+            confidenceEl.textContent = "Camera not started";
+
+            startStopBtn.textContent = "Allow Camera & Start";
+            startStopBtn.classList.replace("btn-danger", "btn-primary");
+        } finally {
+            startStopBtn.disabled = false;
+        }
+    }
+
+    function stopDetection() {
+        isDetecting = false;
+
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+
+        if (isPresent) {
+            accumulatedTime += Date.now() - sessionStartTime;
+            isPresent = false;
+            sessionStartTime = 0;
+        }
+
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+        }
+
+        video.srcObject = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        confidenceEl.textContent = "Camera stopped";
+        updateStatus("⚪ Detection Stopped", "idle");
+
+        startStopBtn.textContent = "Allow Camera & Start";
+        startStopBtn.classList.replace("btn-danger", "btn-primary");
+
+        updateTimerDisplay();
+    }
+
+    function resetTimer() {
+        accumulatedTime = 0;
+
+        if (isPresent) {
+            sessionStartTime = Date.now();
+        }
+
+        updateTimerDisplay();
+    }
+
+    startStopBtn.addEventListener("click", () => {
+        if (isDetecting) {
+            stopDetection();
+        } else {
+            startDetection();
+        }
+    });
+
+    resetBtn.addEventListener("click", resetTimer);
+
+    // Do NOT request the camera automatically on page load.
+    // Browsers expect camera permission to follow a user action.
+    updateStatus("⚪ Ready — tap Allow Camera & Start", "idle");
+</script>
+</body>
+</html>
+
