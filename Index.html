@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Face & Body Presence Timer</title>
+    <style>
+        /* Mobile-first, Android-friendly styling */
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1e1e1e;
+            --text-primary: #ffffff;
+            --text-secondary: #aaaaaa;
+            --accent-color: #6200ee;
+            --accent-hover: #7c4dff;
+            --danger-color: #cf6679;
+            --success-color: #4caf50;
+            --warning-color: #ff9800;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Roboto', 'Segoe UI', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Timer Display */
+        .timer-display {
+            background-color: var(--surface-color);
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .time {
+            font-size: 3.5rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+
+        /* Status Pill */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            background-color: #333;
+            transition: all 0.3s ease;
+        }
+
+        .status-pill.running {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success-color);
+        }
+
+        .status-pill.paused {
+            background-color: rgba(207, 102, 121, 0.2);
+            color: var(--danger-color);
+        }
+
+        .status-pill.idle {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: var(--warning-color);
+        }
+
+        /* Camera View */
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 3 / 4; /* Standard mobile camera ratio */
+            background-color: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        video, canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        canvas {
+            z-index: 10;
+        }
+
+        .confidence-indicator {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            z-index: 20;
+            backdrop-filter: blur(4px);
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 12px;
+            flex-direction: column;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: background-color 0.2s, opacity 0.2s;
+            touch-action: manipulation;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        .btn-primary:active {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-danger {
+            background-color: var(--danger-color);
+            color: white;
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            border: 2px solid var(--text-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:active {
+            background-color: rgba(255,255,255,0.1);
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Timer Section -->
+    <div class="timer-display">
+        <div class="time" id="timeDisplay">00:00:00</div>
+        <div class="status-pill idle" id="statusPill">
+            🟡 Loading Face & Body Models...
+        </div>
+    </div>
+
+    <!-- Camera / Face & Body Detection Section -->
+    <div class="video-wrapper">
+        <!-- Playsinline required for mobile browsers to prevent fullscreen takeover -->
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output_canvas"></canvas>
+        <div class="confidence-indicator" id="confidenceEl">Confidence: 0%</div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+        <button id="startStopBtn" class="btn-primary" disabled>Start Detection</button>
+        <button id="resetBtn" class="btn-secondary">Reset Timer</button>
+    </div>
+</div>
+
+<!-- Import MediaPipe Tasks Vision dynamically via ES Modules -->
+<script type="module">
+    import {
+        FaceDetector,
+        ObjectDetector,
+        FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js";
+
+    // --- DOM Elements ---
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("output_canvas");
+    const ctx = canvas.getContext("2d");
+    const timeDisplay = document.getElementById("timeDisplay");
+    const statusPill = document.getElementById("statusPill");
+    const confidenceEl = document.getElementById("confidenceEl");
+    const startStopBtn = document.getElementById("startStopBtn");
+    const resetBtn = document.getElementById("resetBtn");
+
+    // --- Detection State ---
+    let faceDetector = null;
+    let personDetector = null;
+    let isDetecting = false;
+    let animationId = null;
+    let stream = null;
+    let lastDetectionTime = 0;
+    let detectionBusy = false;
+
+    // About 8 detection passes/sec. This is lighter on Android than
+    // running both AI models on every animation frame.
+    const DETECTION_INTERVAL_MS = 125;
+
+    // --- Timer State ---
+    let accumulatedTime = 0;
+    let sessionStartTime = 0;
+    let isPresent = false;
+
+    // --- Detection Stability ---
+    let presenceFirstSeenTime = 0;
+    let presenceLastSeenTime = 0;
+
+    const START_DEBOUNCE_MS = 250;
+    const STOP_DEBOUNCE_MS = 1000;
+
+    // --- Model Initialization ---
+    async function initializeModel() {
+        try {
+            updateStatus("🟡 Loading face & body models...", "idle");
+
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+            );
+
+            // Face detector
+            faceDetector = await FaceDetector.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath:
+                        "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                minDetectionConfidence: 0.5
+            });
+
+            // Person/body detector.
+            // EfficientDet Lite detects objects such as "person".
+            personDetector = await ObjectDetector.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath:
+                        "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite",
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                scoreThreshold: 0.45,
+                maxResults: 5
+            });
+
+            startStopBtn.disabled = false;
+            updateStatus("⚪ Ready to start", "idle");
+        } catch (error) {
+            console.error("Error loading detection models:", error);
+            updateStatus("🔴 Model Load Error", "paused");
+            confidenceEl.innerText = "Face/body models failed to load";
+        }
+    }
+
+    // --- Timer Formatting ---
+    function formatTime(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        return `${hours.toString().padStart(2, "0")}:` +
+               `${minutes.toString().padStart(2, "0")}:` +
+               `${seconds.toString().padStart(2, "0")}`;
+    }
+
+    // --- UI ---
+    function updateStatus(text, state) {
+        statusPill.innerText = text;
+        statusPill.className = `status-pill ${state}`;
+    }
+
+    function updateTimerDisplay() {
+        let displayTime = accumulatedTime;
+
+        if (isPresent && isDetecting) {
+            displayTime += Date.now() - sessionStartTime;
+        }
+
+        timeDisplay.innerText = formatTime(displayTime);
+    }
+
+    function drawBox(bbox, strokeStyle, label) {
+        if (!bbox) return;
+
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = Math.max(3, canvas.width / 180);
+        ctx.strokeRect(
+            bbox.originX,
+            bbox.originY,
+            bbox.width,
+            bbox.height
+        );
+
+        // Small readable label above the box.
+        ctx.font = `${Math.max(14, canvas.width / 35)}px sans-serif`;
+        const textWidth = ctx.measureText(label).width;
+        const labelHeight = Math.max(22, canvas.width / 25);
+        const labelX = Math.max(0, bbox.originX);
+        const labelY = Math.max(labelHeight, bbox.originY);
+
+        ctx.fillStyle = strokeStyle;
+        ctx.fillRect(labelX, labelY - labelHeight, textWidth + 12, labelHeight);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(label, labelX + 6, labelY - 6);
+    }
+
+    // --- Detection Loop ---
+    async function predictWebcam() {
+        if (!isDetecting) return;
+
+        const now = Date.now();
+
+        if (
+            video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+            video.videoWidth > 0 &&
+            video.videoHeight > 0 &&
+            !detectionBusy &&
+            (now - lastDetectionTime >= DETECTION_INTERVAL_MS)
+        ) {
+            lastDetectionTime = now;
+            detectionBusy = true;
+
+            try {
+                const timestamp = performance.now();
+
+                // Run face and body/person detection.
+                const [faceResults, personResults] = await Promise.all([
+                    Promise.resolve(faceDetector.detectForVideo(video, timestamp)),
+                    Promise.resolve(personDetector.detectForVideo(video, timestamp))
+                ]);
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                const faceDetections = faceResults?.detections ?? [];
+                const objectDetections = personResults?.detections ?? [];
+
+                // Keep only "person" detections from the object detector.
+                const personDetections = objectDetections.filter(detection => {
+                    const category = detection.categories?.[0];
+                    return category &&
+                           String(category.categoryName || "").toLowerCase() === "person";
+                });
+
+                const faceDetected = faceDetections.length > 0;
+                const bodyDetected = personDetections.length > 0;
+                const humanDetected = faceDetected || bodyDetected;
+
+                let bestConfidence = 0;
+
+                // Draw face boxes.
+                for (const detection of faceDetections) {
+                    const confidence =
+                        detection.categories?.[0]?.score ?? 0;
+
+                    bestConfidence = Math.max(bestConfidence, confidence);
+
+                    drawBox(
+                        detection.boundingBox,
+                        "#4caf50",
+                        `FACE ${Math.round(confidence * 100)}%`
+                    );
+                }
+
+                // Draw body/person boxes.
+                for (const detection of personDetections) {
+                    const confidence =
+                        detection.categories?.[0]?.score ?? 0;
+
+                    bestConfidence = Math.max(bestConfidence, confidence);
+
+                    drawBox(
+                        detection.boundingBox,
+                        "#2196f3",
+                        `BODY ${Math.round(confidence * 100)}%`
+                    );
+                }
+
+                if (humanDetected) {
+                    confidenceEl.innerText =
+                        `Detected: ${faceDetected ? "Face" : ""}` +
+                        `${faceDetected && bodyDetected ? " + " : ""}` +
+                        `${bodyDetected ? "Body" : ""} • ` +
+                        `Confidence: ${Math.round(bestConfidence * 100)}%`;
+
+                    // A face OR body counts as presence.
+                    if (presenceFirstSeenTime === 0) {
+                        presenceFirstSeenTime = now;
+                    }
+
+                    presenceLastSeenTime = now;
+
+                    if (
+                        !isPresent &&
+                        now - presenceFirstSeenTime >= START_DEBOUNCE_MS
+                    ) {
+                        isPresent = true;
+                        sessionStartTime = now;
+                        updateStatus(
+                            "🟢 Human detected — Timer running",
+                            "running"
+                        );
+                    }
+                } else {
+                    confidenceEl.innerText = "Detected: None • Confidence: 0%";
+
+                    // Reset only the start debounce. Keep last-seen timestamp
+                    // so the 1-second absence grace period works correctly.
+                    presenceFirstSeenTime = 0;
+
+                    if (
+                        isPresent &&
+                        now - presenceLastSeenTime >= STOP_DEBOUNCE_MS
+                    ) {
+                        isPresent = false;
+                        accumulatedTime += now - sessionStartTime;
+                        sessionStartTime = 0;
+
+                        updateStatus(
+                            "🔴 No face or body detected — Timer paused",
+                            "paused"
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error("Detection error:", error);
+                confidenceEl.innerText = "Detection error";
+                updateStatus("🔴 Detection error", "paused");
+            } finally {
+                detectionBusy = false;
+            }
+        }
+
+        updateTimerDisplay();
+        animationId = requestAnimationFrame(predictWebcam);
+    }
+
+    // --- Start/Stop Camera ---
+    async function toggleDetection() {
+        if (!isDetecting) {
+            try {
+                if (!navigator.mediaDevices?.getUserMedia) {
+                    throw new Error("Camera API is not available.");
+                }
+
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+
+                video.srcObject = stream;
+
+                // Wait for the video to have real dimensions before starting
+                // the detection loop. This avoids the old undefined
+                // startCamera() call and duplicate metadata handlers.
+                await video.play();
+
+                if (!video.videoWidth || !video.videoHeight) {
+                    await new Promise(resolve => {
+                        video.addEventListener("loadedmetadata", resolve, {
+                            once: true
+                        });
+                    });
+                }
+
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                isDetecting = true;
+                lastDetectionTime = 0;
+                detectionBusy = false;
+
+                startStopBtn.innerText = "Stop Detection";
+                startStopBtn.classList.replace("btn-primary", "btn-danger");
+
+                isPresent = false;
+                presenceFirstSeenTime = 0;
+                presenceLastSeenTime = 0;
+
+                updateStatus(
+                    "🟡 Looking for face or body...",
+                    "idle"
+                );
+
+                predictWebcam();
+
+            } catch (err) {
+                console.error("Camera access error:", err);
+
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+
+                video.srcObject = null;
+
+                alert(
+                    "Camera permission is required to run face/body detection."
+                );
+
+                updateStatus(
+                    "🔴 Camera Permission Denied",
+                    "paused"
+                );
+            }
+        } else {
+            // STOP DETECTION
+            isDetecting = false;
+
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+
+            if (isPresent) {
+                accumulatedTime += Date.now() - sessionStartTime;
+                isPresent = false;
+                sessionStartTime = 0;
+            }
+
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            video.srcObject = null;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            confidenceEl.innerText = "Confidence: 0%";
+
+            updateStatus("⚪ Detection Stopped", "idle");
+            updateTimerDisplay();
+
+            startStopBtn.innerText = "Start Detection";
+            startStopBtn.classList.replace("btn-danger", "btn-primary");
+        }
+    }
+
+    // --- Reset Timer ---
+    function resetTimer() {
+        accumulatedTime = 0;
+
+        if (isPresent) {
+            sessionStartTime = Date.now();
+        }
+
+        updateTimerDisplay();
+    }
+
+    // --- Event Listeners ---
+    startStopBtn.addEventListener("click", toggleDetection);
+    resetBtn.addEventListener("click", resetTimer);
+
+    // --- Start Model Loading ---
+    initializeModel();
+</script>
+</body>
+</html>
+
